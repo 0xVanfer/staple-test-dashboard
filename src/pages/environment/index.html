@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Environment</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.0/dist/ethers.umd.min.js"></script>
+    <script src="../../../abigen/stapleTestERC20Factory/stapleTestERC20Factory.js"></script>
+    <script src="../../../abigen/stapleUIPoolDataProvider/stapleUIPoolDataProvider.js"></script>
+    <script src="../../../abigen/stapleController/stapleController.js"></script>
+    <script src="../../../abigen/mockExternalDexExtentions/mockExternalDexExtentions.js"></script>
+    <script src="../../lib/common.js"></script>
+    <script src="../../lib/rpcManager.js"></script>
+    <script src="../../lib/contractCalls.js"></script>
+    <script src="./environment.js" defer></script>
+    <script>var toHome = "../../../";</script>
+    <script src="../../components/navbar/navbar.js" defer></script>
+
+    <link rel="stylesheet" href="../../components/navbar/navbar.css">
+    <link rel="stylesheet" href="./environment.css">
+</head>
+<body>
+    <div class="env-layout">
+        <!-- Sidebar -->
+        <div class="env-sidebar">
+            <div class="sidebar-header">
+                <h2>Settings</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-item active" data-tab="user-settings">
+                    <span class="icon">👤</span> User Settings
+                </div>
+                <div class="nav-item" data-tab="network-settings">
+                    <span class="icon">🌐</span> Network Settings
+                </div>
+                <div class="nav-item" data-tab="contract-addresses">
+                    <span class="icon">📋</span> Contract Addresses
+                </div>
+                <div class="nav-item" data-tab="pool-info">
+                    <span class="icon">🏊</span> Pool Info
+                </div>
+                <div class="nav-item" data-tab="symbols">
+                    <span class="icon">🔣</span> Symbols
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="../../../index.html" class="back-link">← Back to Home</a>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="env-content">
+            
+            <!-- User Settings Tab -->
+            <div id="user-settings" class="tab-pane active">
+                <div class="pane-header">
+                    <h1>User Settings</h1>
+                    <button class="btn-clear-cache" onclick="window.clearEnvCache('user')">Clear User Cache</button>
+                </div>
+                <div class="pane-body">
+                    <div class="card">
+                        <h3>User List</h3>
+                        <div id="user-list-container" class="user-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3>Add New User</h3>
+                        <div class="form-grid vertical-form">
+                            <div class="form-item">
+                                <label>Address</label>
+                                <input id="input-user-address" type="text" class="form-control" placeholder="0x... address (auto-filled if PK provided)">
+                            </div>
+                            <div class="form-item">
+                                <label>Private Key (Optional)</label>
+                                <input id="input-user-pk" type="password" class="form-control" placeholder="Private Key">
+                            </div>
+                            <div class="form-item">
+                                <label>Nickname (Optional)</label>
+                                <input id="input-user-nickname" type="text" class="form-control" placeholder="Nickname">
+                            </div>
+                            <div class="form-item" style="display: flex; gap: 8px;">
+                                <button id="submit-user-add" class="btn btn-primary">Add User</button>
+                                <button id="btn-generate-random" class="btn btn-secondary" title="Generate random wallet">🎲 Random</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Network Settings Tab -->
+            <div id="network-settings" class="tab-pane">
+                <div class="pane-header">
+                    <h1>Network Settings</h1>
+                    <div class="header-actions">
+                        <select id="network-select" class="form-control sm"></select>
+                        <button id="btn-new-network" class="btn btn-secondary btn-sm">New Network</button>
+                        <button class="btn-clear-cache" onclick="window.clearEnvCache('network')">Clear Network Cache</button>
+                    </div>
+                </div>
+                <div class="pane-body">
+                    <div class="card">
+                        <h3>General Configuration</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>Environment Type</label>
+                                <div class="setting-row">
+                                    <span id="current-is-production" class="value-display"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-is-production')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-is-production" class="edit-form hidden">
+                                    <label class="checkbox-label"><input id="input-is-production" type="checkbox"> Production</label>
+                                    <div class="form-actions">
+                                        <button id="submit-is-production" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-is-production')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>RPC Endpoint</label>
+                                <div class="setting-row">
+                                    <span id="current-rpc" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-rpc">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-rpc')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-rpc" class="edit-form hidden">
+                                    <input id="input-rpc" type="text" class="form-control" placeholder="RPC URL">
+                                    <div class="form-actions">
+                                        <button id="submit-rpc" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-rpc')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Chain ID</label>
+                                <div class="setting-row">
+                                    <span id="current-chainID" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-chainID">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Deployer Configuration</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>Deployer Private Key</label>
+                                <div class="setting-row">
+                                    <span id="current-deployer-pk-status" class="value-display"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-deployer-pk')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-deployer-pk" class="edit-form hidden">
+                                    <input id="input-deployer-pk" type="password" class="form-control" placeholder="Private Key">
+                                    <div class="form-actions">
+                                        <button id="submit-deployer-pk" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-deployer-pk')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Contract Deployer Address</label>
+                                <div class="setting-row">
+                                    <span id="current-contractDeployer" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-contractDeployer">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-contractDeployer')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-contractDeployer" class="edit-form hidden">
+                                    <input id="input-contractDeployer" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-contractDeployer" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-contractDeployer')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Chainlink Stream API</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>Stream API Key</label>
+                                <div class="setting-row">
+                                    <span id="current-chainlinkStreamApiKey" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-chainlinkStreamApiKey">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-chainlinkStreamApiKey')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-chainlinkStreamApiKey" class="edit-form hidden">
+                                    <input id="input-chainlinkStreamApiKey" type="text" class="form-control" placeholder="API Key">
+                                    <div class="form-actions">
+                                        <button id="submit-chainlinkStreamApiKey" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-chainlinkStreamApiKey')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Stream API Secret</label>
+                                <div class="setting-row">
+                                    <span id="current-chainlinkStreamApiSecret" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-chainlinkStreamApiSecret')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-chainlinkStreamApiSecret" class="edit-form hidden">
+                                    <input id="input-chainlinkStreamApiSecret" type="password" class="form-control" placeholder="API Secret">
+                                    <div class="form-actions">
+                                        <button id="submit-chainlinkStreamApiSecret" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-chainlinkStreamApiSecret')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Contract Addresses Tab -->
+            <div id="contract-addresses" class="tab-pane">
+                <div class="pane-header">
+                    <h1>Contract Addresses</h1>
+                    <div class="header-actions">
+                        <button id="btn-reset-contracts" class="btn btn-secondary">Reload Contracts</button>
+                        <button class="btn-clear-cache" onclick="window.clearEnvCache('contracts')">Clear Contracts Cache</button>
+                    </div>
+                </div>
+                <div class="pane-body">
+                    <div class="card">
+                        <h3>Core Contracts</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>UI Pool Data Provider</label>
+                                <div class="setting-row">
+                                    <span id="current-uiPoolDataProvider" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-uiPoolDataProvider">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-uiPoolDataProvider')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-uiPoolDataProvider" class="edit-form hidden">
+                                    <input id="input-uiPoolDataProvider" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-uiPoolDataProvider" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-uiPoolDataProvider')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Pool Implementation</label>
+                                <div class="setting-row">
+                                    <span id="current-poolImpl" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-poolImpl">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-poolImpl')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-poolImpl" class="edit-form hidden">
+                                    <input id="input-poolImpl" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-poolImpl" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-poolImpl')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Router</label>
+                                <div class="setting-row">
+                                    <span id="current-router" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-router">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-router')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-router" class="edit-form hidden">
+                                    <input id="input-router" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-router" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-router')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Test ERC20 Factory</label>
+                                <div class="setting-row">
+                                    <span id="current-testERC20Factory" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-testERC20Factory">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-testERC20Factory')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-testERC20Factory" class="edit-form hidden">
+                                    <input id="input-testERC20Factory" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-testERC20Factory" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-testERC20Factory')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Verifiers</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>Staple Verifier</label>
+                                <div class="setting-row">
+                                    <span id="current-stapleVerifier" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-stapleVerifier">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-stapleVerifier')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-stapleVerifier" class="edit-form hidden">
+                                    <input id="input-stapleVerifier" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-stapleVerifier" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-stapleVerifier')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Chainlink DataFeed Verifier</label>
+                                <div class="setting-row">
+                                    <span id="current-chainlinkDataFeedVerifier" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-chainlinkDataFeedVerifier">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-chainlinkDataFeedVerifier')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-chainlinkDataFeedVerifier" class="edit-form hidden">
+                                    <input id="input-chainlinkDataFeedVerifier" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-chainlinkDataFeedVerifier" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-chainlinkDataFeedVerifier')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item">
+                                <label>Chainlink Stream Verifier</label>
+                                <div class="setting-row">
+                                    <span id="current-chainlinkStreamVerifier" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-chainlinkStreamVerifier">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-chainlinkStreamVerifier')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-chainlinkStreamVerifier" class="edit-form hidden">
+                                    <input id="input-chainlinkStreamVerifier" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-chainlinkStreamVerifier" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-chainlinkStreamVerifier')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Mock DEX Configuration</h3>
+                        <div class="form-grid">
+                            <div class="form-item">
+                                <label>Mock DEX Aggregator</label>
+                                <div class="setting-row">
+                                    <span id="current-mockDexAggregator" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-mockDexAggregator">📋</button>
+                                        <button class="btn-icon edit-btn" onclick="toggleEdit('edit-mockDexAggregator')">✎</button>
+                                    </div>
+                                </div>
+                                <div id="edit-mockDexAggregator" class="edit-form hidden">
+                                    <input id="input-mockDexAggregator" type="text" class="form-control" placeholder="0x...">
+                                    <div class="form-actions">
+                                        <button id="submit-mockDexAggregator" class="btn btn-sm btn-primary">Update</button>
+                                        <button class="btn btn-sm btn-secondary" onclick="toggleEdit('edit-mockDexAggregator')">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item readonly">
+                                <label>Mock Curve</label>
+                                <div class="setting-row">
+                                    <span id="current-mockCurve" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-mockCurve">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item readonly">
+                                <label>Mock Uniswap V3</label>
+                                <div class="setting-row">
+                                    <span id="current-mockUniswapV3" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-mockUniswapV3">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Derived Addresses (Read-only)</h3>
+                        <div class="form-grid">
+                            <div class="form-item readonly">
+                                <label>Controller</label>
+                                <div class="setting-row">
+                                    <span id="current-controller" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-controller">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item readonly">
+                                <label>Incentives Controller</label>
+                                <div class="setting-row">
+                                    <span id="current-incentivesController" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-incentivesController">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-item readonly">
+                                <label>Price Provider</label>
+                                <div class="setting-row">
+                                    <span id="current-priceProvider" class="value-display mono"></span>
+                                    <div class="setting-actions">
+                                        <button class="btn-icon copy-btn" data-copy-target="current-priceProvider">📋</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pool Info Tab -->
+            <div id="pool-info" class="tab-pane">
+                <div class="pane-header">
+                    <h1>Pool Info Cache</h1>
+                    <button id="btn-refresh-pool-info" class="btn btn-primary">Force Refresh</button>
+                </div>
+                <div class="pane-body">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Cache Status</h3>
+                            <span id="pool-info-status" class="badge">Checking...</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="info-row">
+                                <label>Last Updated:</label>
+                                <span id="pool-info-timestamp" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>TTL:</label>
+                                <span id="pool-info-ttl" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>Expires In:</label>
+                                <span id="pool-info-expires" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>Pool Length:</label>
+                                <span id="pool-info-length" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>VTP Length:</label>
+                                <span id="pool-info-vtp-length" class="mono">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>Raw Data Preview</h3>
+                        </div>
+                        <div class="card-body">
+                            <pre id="pool-info-preview" class="code-block" style="max-height: 300px; overflow-y: auto;">No data</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Symbols Tab -->
+            <div id="symbols" class="tab-pane">
+                <div class="pane-header">
+                    <h1>Symbol Cache</h1>
+                    <button id="btn-refresh-symbols" class="btn btn-primary">Force Refresh</button>
+                </div>
+                <div class="pane-body">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Cache Status</h3>
+                            <span id="symbols-status" class="badge">Checking...</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="info-row">
+                                <label>Last Updated:</label>
+                                <span id="symbols-timestamp" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>TTL:</label>
+                                <span id="symbols-ttl" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>Expires In:</label>
+                                <span id="symbols-expires" class="mono">-</span>
+                            </div>
+                            <div class="info-row">
+                                <label>Total Symbols:</label>
+                                <span id="symbols-count" class="mono">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h3>Cached Symbols</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="symbols-list" class="grid-list" style="display: flex; flex-direction: column; gap: 8px;">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hidden elements for compatibility if needed -->
+            <div style="display:none;">
+                <span id="current-block-time"></span>
+                <span id="current-block-number"></span>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        // Tab Switching Logic
+        const navItems = document.querySelectorAll('.nav-item');
+        const tabPanes = document.querySelectorAll('.tab-pane');
+
+        navItems.forEach(item => {
+            item.addEventListener('click', () => {
+                // Exclusive tab selection
+                navItems.forEach(nav => nav.classList.remove('active'));
+                tabPanes.forEach(pane => pane.classList.remove('active'));
+                
+                const targetId = item.getAttribute('data-tab');
+                const targetPane = document.getElementById(targetId);
+                
+                item.classList.add('active');
+                if (targetPane) targetPane.classList.add('active');
+            });
+        });
+
+        // Reset Contracts Button
+        const btnResetContracts = document.getElementById('btn-reset-contracts');
+        if (btnResetContracts) {
+            btnResetContracts.addEventListener('click', () => {
+                if(window.environment && window.environment.resetContracts) {
+                    window.environment.resetContracts();
+                } else {
+                    location.reload();
+                }
+            });
+        }
+      });
+    </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+abigen/*/*.go
+abigen/*/*.abi
+abigen/*/*.json
+
+# Test files
+**/test-*.html
+contracts/
