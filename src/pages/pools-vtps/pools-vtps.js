@@ -169,6 +169,9 @@
     const currentId = preserveSelection ? state.selectedItemId : null;
     setGlobalLoading(true, 'Refreshing pools...');
     
+    // Clear cached extra data to ensure fresh fetch
+    state.selectedPoolExtraData = null;
+    
     // Explicitly update pools cache on manual refresh
     try {
         if (window.PoolDataManager && window.PoolDataManager.updatePools) {
@@ -179,6 +182,7 @@
     }
 
     await loadData();
+    
     if (currentId !== null) {
       state.selectedItemId = currentId;
       // Re-select item and fetch extra data
@@ -188,6 +192,7 @@
           await fetchPoolExtraData(found);
       }
     }
+    
     await renderFilterList();
     await renderDetails();
     await renderRelated();
@@ -249,6 +254,7 @@
 
     // Auto-select: if selectedItemId is set (manual refresh), find and select it; otherwise select first
     let shouldAutoSelect = false;
+    
     if (state.selectedItemId !== null) {
       const found = filteredItems.find(item => String(item.data?.params?.id) === String(state.selectedItemId));
       if (found) {
@@ -260,12 +266,12 @@
       shouldAutoSelect = true;
     }
     
-    state.selectedPoolExtraData = null; // Cache for extra pool data (fetched via multicall)
-    
+    // Only fetch extra data if auto-selecting a new item (don't clear if already fetched)
     if (shouldAutoSelect && filteredItems.length > 0) {
       state.selectedItem = filteredItems[0].data;
       state.selectedItemId = String(filteredItems[0].data?.params?.id);
-      // Fetch extra data for auto-selected item
+      // Clear and fetch extra data for newly auto-selected item
+      state.selectedPoolExtraData = null;
       await fetchPoolExtraData(state.selectedItem);
     }
 
@@ -412,7 +418,10 @@
               if (key === 'poolType') data.poolType = res;
               else if (key === 'totalSupply') data.totalSupply = res;
               else if (key === 'lpPrice') data.lpPrice = res;
-              else if (key === 'paused') data.paused = res;
+              else if (key === 'paused') {
+                  // Ensure paused is a boolean (multicall may return various truthy/falsy values)
+                  data.paused = Boolean(res);
+              }
               else if (key.startsWith('maxAlloc_')) {
                   const vtpId = key.split('_')[1];
                   data.userMaxAllocations[vtpId] = res;
@@ -499,6 +508,25 @@
         }).join('')
       : `<option value="">No Supported Token</option>`;
     
+    // Fetch risk levels count from creditList
+    let riskLevelCount = 10; // default fallback
+    try {
+      const ctl = await window.contracts.getController();
+      if (ctl) {
+        const res = await ctl.getCreditsInfo();
+        const creditList = Array.from(res?.creditList ?? res?.[1] ?? []);
+        riskLevelCount = creditList.length > 0 ? creditList.length : 1;
+        console.log('[Create Pool] Risk levels count from creditList:', riskLevelCount);
+      }
+    } catch (e) {
+      console.warn('[Create Pool] Failed to get credits info, using default risk levels:', e);
+    }
+    
+    // Generate risk level options dynamically (1 to n)
+    const riskOptionsHtml = Array.from({ length: riskLevelCount }, (_, i) => 
+      `<option value="${i + 1}">${i + 1}</option>`
+    ).join('');
+    
     const userAddr = env?.getAllParams().user;
     const isNoUser = !userAddr || (window.ethers && userAddr === window.ethers.constants.AddressZero) || userAddr === "0x0000000000000000000000000000000000000000";
 
@@ -518,16 +546,7 @@
         <div class="form-row">
           <label>Risk Level</label>
           <select id="cp-risk">
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-            <option value="7">7</option>
-            <option value="8">8</option>
-            <option value="9">9</option>
-            <option value="10">10</option>
+            ${riskOptionsHtml}
           </select>
         </div>
         <div class="form-row readonly">
@@ -2089,21 +2108,21 @@
   async function renderPoolActions(container, pool) {
     const lpAddr = pool?.params?.lpAddr;
     
-    // Check if pool is paused using extra data
-    let isPaused = false;
+    // Get paused status from extra data (fetched via multicall)
     const extra = state.selectedPoolExtraData || {};
-    if (extra.paused === true) {
-        isPaused = true;
-    }
-    console.log('Pool paused status:', isPaused);
+    const isPaused = extra.paused === true;
     
-    // (Un)pause pool
+    // Pause/Unpause pool action group
     const pauseGroup = document.createElement('div');
     pauseGroup.className = 'action-group';
+    
+    const pauseActionText = isPaused ? 'Unpause' : 'Pause';
+    const pauseBtnClass = isPaused ? 'action-button' : 'action-button danger';
+    
     pauseGroup.innerHTML = `
-      <div class="action-group-title">${isPaused ? 'Unpause' : 'Pause'} Pool</div>
+      <div class="action-group-title">${pauseActionText} Pool</div>
       <div class="action-form">
-        <button class="action-button ${isPaused ? '' : 'danger'}" id="pause-btn">${isPaused ? 'Unpause' : 'Pause'} Pool</button>
+        <button class="${pauseBtnClass}" id="pause-btn">${pauseActionText} Pool</button>
       </div>
     `;
     container.appendChild(pauseGroup);
@@ -2160,6 +2179,11 @@
     setupPoolActionHandlers(pool, isPaused);
   }
 
+  /**
+   * Setup event handlers for pool actions.
+   * @param {Object} pool - The pool object.
+   * @param {boolean} isPaused - Whether the pool is currently paused (from cached state).
+   */
   function setupPoolActionHandlers(pool, isPaused) {
     const pauseBtn = document.getElementById('pause-btn');
     const depositBtn = document.getElementById('deposit-btn');
@@ -2182,7 +2206,10 @@
         return;
     }
     
+    // Pause/Unpause button handler
     if (pauseBtn) {
+      const actionText = isPaused ? 'Unpause' : 'Pause';
+      
       pauseBtn.addEventListener('click', async () => {
         const poolId = pool?.params?.id;
         const lpAddr = pool?.params?.lpAddr;
@@ -2202,58 +2229,44 @@
           }
 
           pauseBtn.disabled = true;
-          pauseBtn.textContent = 'Checking...';
+          pauseBtn.textContent = `${actionText}ing...`;
           
-          // Use minimal ABI for paused() function
+          // Use minimal ABI for pause/unpause functions
           const minimalPauseABI = [
-            "function paused() public view returns (bool)",
             "function pause() external",
             "function unpause() external"
           ];
           
-          // Get pool contract with deployer signer using impersonation
-          // Note: getPool uses resolveSigner internally but falls back to provider.
-          // We already resolved signer above, so we can use it directly.
-          const poolContractWithPause = new ethers.Contract(
-            lpAddr, 
-            minimalPauseABI, 
-            signer
-          );
+          const poolContract = new ethers.Contract(lpAddr, minimalPauseABI, signer);
           
-          // Read current pause state to determine which operation to perform
-          let currentPauseState = false;
-          try {
-            currentPauseState = await poolContractWithPause.paused();
-            console.log('Current pause state:', currentPauseState);
-          } catch (e) {
-            console.error('Failed to read paused state (method may not exist):', e);
-            alert('This pool does not support pause/unpause functionality');
-            return;
-          }
-          
-          pauseBtn.textContent = currentPauseState ? 'Unpausing...' : 'Pausing...';
-          
+          // Execute the appropriate action based on cached state
           let tx;
-          if (currentPauseState) {
-            // Pool is paused, so unpause it
-            console.log('Unpausing pool', poolId);
-            tx = await poolContractWithPause.unpause();
+          if (isPaused) {
+            console.log('[Pool Actions] Unpausing pool', poolId);
+            tx = await poolContract.unpause();
           } else {
-            // Pool is not paused, so pause it
-            console.log('Pausing pool', poolId);
-            tx = await poolContractWithPause.pause();
+            console.log('[Pool Actions] Pausing pool', poolId);
+            tx = await poolContract.pause();
           }
           
           pauseBtn.textContent = 'Confirming...';
           await tx.wait();
-          alert(`Pool ${currentPauseState ? 'unpaused' : 'paused'} successfully!`);
+          
+          COMMON.showToast?.(`Pool ${actionText.toLowerCase()}d successfully!`) || alert(`Pool ${actionText.toLowerCase()}d successfully!`);
+          
+          // Clear cached extra data to force fresh fetch
+          state.selectedPoolExtraData = null;
+          
+          // Small delay to ensure chain state is updated before re-fetching
+          await new Promise(r => setTimeout(r, 500));
+          
           await refreshData();
         } catch (e) {
-          console.error('Pause/unpause failed:', e);
-          alert('Pause/unpause failed: ' + e.message);
-        } finally {
+          console.error('[Pool Actions] Pause/unpause failed:', e);
+          alert(`${actionText} failed: ${e.message || e}`);
+          // Restore button state
           pauseBtn.disabled = false;
-          pauseBtn.textContent = 'Pause/Unpause Pool';
+          pauseBtn.textContent = `${actionText} Pool`;
         }
       });
     }
