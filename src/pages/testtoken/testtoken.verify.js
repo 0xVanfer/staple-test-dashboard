@@ -391,4 +391,161 @@
 
   // Expose to global
   window.buildPriceProviderVerificationPayload = buildPriceProviderVerificationPayload;
+
+  /**
+   * Decode and explain verification payload
+   * @param {string} encodedData - The encoded hex data (0x...)
+   * @returns {Promise<{json: Array, explanation: Array}>}
+   */
+  async function decodeVerifyData(encodedData) {
+    if (!encodedData || !encodedData.startsWith('0x')) {
+      throw new Error('Invalid encoded data: must start with 0x');
+    }
+
+    // Decode the main structure: (address verifier, address[] assets, address[] baseTokens, bytes data)[]
+    let decoded;
+    try {
+      decoded = ethers.utils.defaultAbiCoder.decode(
+        ["tuple(address,address[],address[],bytes)[]"],
+        encodedData
+      )[0];
+    } catch (e) {
+      throw new Error('Failed to decode data: ' + e.message);
+    }
+
+    // Build JSON structure
+    const jsonResult = decoded.map((item, index) => ({
+      index,
+      verifier: item[0],
+      assets: item[1],
+      baseTokens: item[2],
+      data: item[3]
+    }));
+
+    // Build detailed explanation
+    const explanationResult = [];
+    
+    for (const item of jsonResult) {
+      const verifierAddress = item.verifier;
+      let oracleType = 'UNKNOWN';
+      
+      // Try to get oracle type from verifier contract
+      try {
+        const provider = window.stapleCommon?.getRpcProvider();
+        if (provider) {
+          const verifierContract = new ethers.Contract(
+            verifierAddress,
+            ['function oracleType() view returns (string)'],
+            provider
+          );
+          oracleType = await verifierContract.oracleType();
+        }
+      } catch (e) {
+        console.warn(`[decodeVerifyData] Could not get oracleType for ${verifierAddress}:`, e.message);
+      }
+
+      // Get symbols for assets if possible
+      const assetSymbols = [];
+      const envSymbols = window.environment?.getSymbols?.() || {};
+      for (const asset of item.assets) {
+        const lower = asset.toLowerCase();
+        const symbol = envSymbols[lower] || envSymbols[asset] || truncateAddress(asset);
+        assetSymbols.push({ address: asset, symbol });
+      }
+
+      // Get symbols for base tokens
+      const baseTokenSymbols = [];
+      for (const baseToken of item.baseTokens) {
+        if (baseToken === zeroAddress) {
+          baseTokenSymbols.push({ address: baseToken, symbol: 'USD' });
+        } else {
+          const lower = baseToken.toLowerCase();
+          const symbol = envSymbols[lower] || envSymbols[baseToken] || truncateAddress(baseToken);
+          baseTokenSymbols.push({ address: baseToken, symbol });
+        }
+      }
+
+      // Decode bytes data based on oracle type
+      let decodedBytes = null;
+      const bytesData = item.data;
+      
+      if (bytesData && bytesData !== '0x' && bytesData.length > 2) {
+        try {
+          if (oracleType === 'CHAINLINK_STREAM_v1') {
+            // bytes[] - array of unverified reports
+            const reports = ethers.utils.defaultAbiCoder.decode(['bytes[]'], bytesData)[0];
+            decodedBytes = {
+              type: 'bytes[]',
+              description: 'Chainlink Stream unverified reports',
+              count: reports.length,
+              reports: reports.map((r, i) => ({
+                index: i,
+                length: r.length,
+                preview: r.length > 66 ? r.slice(0, 66) + '...' : r
+              }))
+            };
+          } else if (oracleType === 'REDSTONE_v1') {
+            // Redstone payload - complex structure, just show raw
+            decodedBytes = {
+              type: 'redstone_payload',
+              description: 'Redstone price feed payload',
+              length: bytesData.length,
+              preview: bytesData.length > 130 ? bytesData.slice(0, 130) + '...' : bytesData
+            };
+          } else if (oracleType === 'STAPLE_v1' || oracleType === 'CHAINLINK_DATA_FEED_v1') {
+            // These typically have empty bytes
+            decodedBytes = {
+              type: 'empty_or_unused',
+              description: 'No additional data required for this oracle type'
+            };
+          } else {
+            // Try to decode as generic bytes
+            decodedBytes = {
+              type: 'unknown',
+              description: 'Unknown bytes data',
+              length: bytesData.length,
+              preview: bytesData.length > 130 ? bytesData.slice(0, 130) + '...' : bytesData
+            };
+          }
+        } catch (e) {
+          decodedBytes = {
+            type: 'decode_error',
+            description: 'Could not decode bytes: ' + e.message,
+            raw: bytesData.length > 130 ? bytesData.slice(0, 130) + '...' : bytesData
+          };
+        }
+      }
+
+      explanationResult.push({
+        verifier: verifierAddress,
+        oracleType,
+        oracleTypeDescription: getOracleTypeDescription(oracleType),
+        assets: assetSymbols,
+        baseTokens: baseTokenSymbols,
+        bytesData: bytesData,
+        decodedBytes
+      });
+    }
+
+    return { json: jsonResult, explanation: explanationResult };
+  }
+
+  function truncateAddress(addr) {
+    if (!addr || addr.length < 10) return addr;
+    return addr.slice(0, 6) + '...' + addr.slice(-4);
+  }
+
+  function getOracleTypeDescription(oracleType) {
+    const descriptions = {
+      'STAPLE_v1': 'Staple internal oracle - prices are manually set by admin',
+      'CHAINLINK_DATA_FEED_v1': 'Chainlink Data Feed - reads from on-chain Chainlink aggregator contracts',
+      'CHAINLINK_STREAM_v1': 'Chainlink Data Streams - uses off-chain reports verified on-chain',
+      'REDSTONE_v1': 'Redstone Oracle - prices extracted from signed data packages',
+      'UNKNOWN': 'Unknown oracle type - could not determine verifier type'
+    };
+    return descriptions[oracleType] || descriptions['UNKNOWN'];
+  }
+
+  // Expose decode function
+  window.decodeVerifyData = decodeVerifyData;
 })();

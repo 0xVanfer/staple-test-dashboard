@@ -70,7 +70,10 @@
                 <div class="card-icon">✅</div>
                 <h3>Price Verification</h3>
                 <p class="card-desc">Verify prices after updating</p>
-                <button id="btn-verify" class="btn-primary">Verify All Prices</button>
+                <div class="card-actions">
+                    <button id="btn-verify" class="btn-primary">Verify All Prices</button>
+                    <button id="btn-decode-verify" class="btn-secondary">Decode Verify Data</button>
+                </div>
             </div>
 
             <!-- Create Token Card -->
@@ -186,6 +189,34 @@
     <!-- Success Toast -->
     <div id="success-toast" class="toast"></div>
 
+    <!-- Decode Verify Data Modal -->
+    <div id="decode-modal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>Decode Verify Data</h3>
+                <button class="modal-close" id="decode-modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Encoded Verify Data (hex)</label>
+                    <textarea id="decode-input" rows="6" placeholder="Paste encoded verify data here (0x...)"></textarea>
+                </div>
+                <button id="btn-do-decode" class="btn-primary">Decode</button>
+                
+                <div id="decode-results" style="display: none;">
+                    <div class="decode-section">
+                        <h4>1. Decoded Structure (JSON)</h4>
+                        <pre id="decode-json"></pre>
+                    </div>
+                    <div class="decode-section">
+                        <h4>2. Detailed Explanation</h4>
+                        <div id="decode-explanation"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Modal auto-close setup - wrapped in DOMContentLoaded
         document.addEventListener('DOMContentLoaded', () => {
@@ -244,6 +275,144 @@
             } else if (value === 'CHAINLINK_DATA_FEED') {
                 chainlinkFeed.style.display = 'block';
                 feedInput.disabled = false;
+            }
+        });
+
+        // Decode Verify Data Modal
+        document.addEventListener('DOMContentLoaded', () => {
+            const decodeModal = document.getElementById('decode-modal');
+            const decodeBtn = document.getElementById('btn-decode-verify');
+            const decodeCloseBtn = document.getElementById('decode-modal-close');
+            const doDecodeBtn = document.getElementById('btn-do-decode');
+            const decodeInput = document.getElementById('decode-input');
+            const decodeResults = document.getElementById('decode-results');
+            const decodeJson = document.getElementById('decode-json');
+            const decodeExplanation = document.getElementById('decode-explanation');
+
+            // Open decode modal
+            decodeBtn?.addEventListener('click', () => {
+                decodeModal?.classList.add('show');
+                decodeResults.style.display = 'none';
+                decodeInput.value = '';
+            });
+
+            // Close decode modal
+            decodeCloseBtn?.addEventListener('click', () => {
+                decodeModal?.classList.remove('show');
+            });
+
+            decodeModal?.addEventListener('click', (e) => {
+                if (e.target === decodeModal) decodeModal.classList.remove('show');
+            });
+
+            // Do decode
+            doDecodeBtn?.addEventListener('click', async () => {
+                const inputData = decodeInput.value.trim();
+                if (!inputData) {
+                    alert('Please enter encoded data');
+                    return;
+                }
+
+                doDecodeBtn.disabled = true;
+                doDecodeBtn.textContent = 'Decoding...';
+
+                try {
+                    const { json, explanation } = await window.decodeVerifyData(inputData);
+                    
+                    // Display JSON
+                    decodeJson.textContent = JSON.stringify(json, (key, value) => {
+                        // Convert BigNumber-like objects to strings
+                        if (value && value._isBigNumber) return value.toString();
+                        return value;
+                    }, 2);
+
+                    // Display Explanation
+                    decodeExplanation.innerHTML = renderExplanation(explanation);
+
+                    decodeResults.style.display = 'block';
+                } catch (e) {
+                    alert('Decode failed: ' + e.message);
+                    console.error('[Decode] Error:', e);
+                } finally {
+                    doDecodeBtn.disabled = false;
+                    doDecodeBtn.textContent = 'Decode';
+                }
+            });
+
+            function renderExplanation(explanation) {
+                if (!explanation || explanation.length === 0) {
+                    return '<p>No data to display</p>';
+                }
+
+                return explanation.map((group, idx) => {
+                    const badgeClass = getBadgeClass(group.oracleType);
+                    
+                    let assetsHtml = group.assets.map((a, i) => {
+                        const baseToken = group.baseTokens[i];
+                        return `
+                            <div class="asset-item">
+                                <span class="asset-symbol">${a.symbol}</span>
+                                <span class="asset-address">${a.address}</span>
+                                <span class="base-token">/ ${baseToken.symbol}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    let bytesHtml = '';
+                    if (group.bytesData && group.bytesData !== '0x' && group.bytesData.length > 2) {
+                        bytesHtml = `
+                            <div class="bytes-data">
+                                <div class="bytes-data-label">Additional Data (${group.bytesData.length} chars)</div>
+                                <div class="bytes-data-content">${group.bytesData.length > 200 ? group.bytesData.slice(0, 200) + '...' : group.bytesData}</div>
+                                ${group.decodedBytes ? `
+                                    <div class="bytes-decoded">
+                                        <div class="bytes-decoded-label">${group.decodedBytes.description || 'Decoded'}</div>
+                                        <div class="bytes-decoded-content">${formatDecodedBytes(group.decodedBytes)}</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        `;
+                    }
+
+                    return `
+                        <div class="verifier-group">
+                            <div class="verifier-header">
+                                <span class="verifier-type-badge ${badgeClass}">${group.oracleType}</span>
+                                <span class="verifier-address">${group.verifier}</span>
+                            </div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                                ${group.oracleTypeDescription}
+                            </div>
+                            <div class="asset-list">
+                                <strong style="font-size: 12px; color: #333;">Assets (${group.assets.length}):</strong>
+                                ${assetsHtml}
+                            </div>
+                            ${bytesHtml}
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            function getBadgeClass(oracleType) {
+                if (oracleType === 'STAPLE_v1') return 'staple';
+                if (oracleType === 'CHAINLINK_DATA_FEED_v1') return 'chainlink-feed';
+                if (oracleType === 'CHAINLINK_STREAM_v1') return 'chainlink-stream';
+                if (oracleType === 'REDSTONE_v1') return 'redstone';
+                return 'unknown';
+            }
+
+            function formatDecodedBytes(decoded) {
+                if (!decoded) return '';
+                if (decoded.type === 'bytes[]' && decoded.reports) {
+                    return `${decoded.count} report(s)`;
+                }
+                if (decoded.count !== undefined) {
+                    return `Count: ${decoded.count}`;
+                }
+                if (decoded.length !== undefined) {
+                    return `Length: ${decoded.length} bytes`;
+                }
+                return decoded.type || '';
             }
         });
     </script>
