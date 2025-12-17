@@ -22,6 +22,9 @@
      * @returns {bigint} Result
      */
     mulDiv: (a, b, c, rounding = 'floor') => {
+      if (c === 0n) {
+        throw new Error('Division by zero');
+      }
       const product = a * b;
       if (rounding === 'ceil') {
         return (product + c - 1n) / c;
@@ -54,6 +57,34 @@
   };
 
   /**
+   * Converts a number in scientific notation to a fixed decimal string.
+   * @param {string} value - The string potentially in scientific notation.
+   * @returns {string} Fixed decimal string.
+   */
+  function scientificToDecimal(value) {
+    if (!value.includes('e') && !value.includes('E')) return value;
+    
+    const match = value.match(/^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+    if (!match) return value;
+    
+    const [, sign, intPart, fracPart = '', expStr] = match;
+    const exp = parseInt(expStr, 10);
+    const digits = intPart + fracPart;
+    const decimalPos = intPart.length + exp;
+    
+    if (decimalPos >= digits.length) {
+      // No decimal point needed, pad with zeros
+      return sign + digits + '0'.repeat(decimalPos - digits.length);
+    } else if (decimalPos <= 0) {
+      // All digits are after decimal point
+      return sign + '0.' + '0'.repeat(-decimalPos) + digits;
+    } else {
+      // Decimal point is within digits
+      return sign + digits.slice(0, decimalPos) + '.' + digits.slice(decimalPos);
+    }
+  }
+
+  /**
    * Parses a string value to BigInt with specified decimals.
    * @param {string|number} value - The value to parse.
    * @param {number} decimals - Number of decimals.
@@ -62,12 +93,32 @@
   function parseUnits(value, decimals) {
     if (!value) return 0n;
     if (typeof value !== 'string') value = value.toString();
+    
+    // Handle scientific notation (e.g., "1.5e-10" or "1e18") without recursion
+    if (value.includes('e') || value.includes('E')) {
+      value = scientificToDecimal(value);
+      // If conversion failed or value is effectively zero
+      if (value.includes('e') || value.includes('E')) {
+        console.warn('[parseUnits] Could not convert scientific notation:', value);
+        return 0n;
+      }
+    }
+    
     let [integer, fraction = ''] = value.split('.');
+    // Handle negative numbers
+    let negative = false;
+    if (integer.startsWith('-')) {
+      negative = true;
+      integer = integer.slice(1);
+    }
+    // Clean up leading zeros in integer part (but keep at least one digit)
+    integer = integer.replace(/^0+/, '') || '0';
     if (fraction.length > decimals) {
       fraction = fraction.slice(0, decimals);
     }
     fraction = fraction.padEnd(decimals, '0');
-    return BigInt(integer + fraction);
+    const result = BigInt(integer + fraction);
+    return negative ? -result : result;
   }
 
   /**
@@ -133,9 +184,17 @@
       const decimalsOut = Number(toToken.params?.decimals || 18);
 
       // Inputs are strings from UI (human readable)
-      const amountIn = parseUnits(swapAmount, decimalsIn);
+      let amountIn;
+      try {
+        amountIn = parseUnits(swapAmount, decimalsIn);
+      } catch (e) {
+        return { error: 'Invalid swap amount: ' + e.message };
+      }
       if (amountIn === 0n) {
-        return { error: 'Zero amount' };
+        return { error: 'Swap amount is zero' };
+      }
+      if (amountIn < 0n) {
+        return { error: 'Swap amount cannot be negative' };
       }
 
       // Parse Token Params
@@ -143,6 +202,20 @@
       const liabilityIn = parseUnits(fromToken.status.liability, decimalsIn);
       const assetsOut = parseUnits(toToken.status.assets, decimalsOut);
       const liabilityOut = parseUnits(toToken.status.liability, decimalsOut);
+
+      // Validate pool state
+      if (assetsIn <= 0n) {
+        return { error: 'From token has no assets (liquidity)' };
+      }
+      if (assetsOut <= 0n) {
+        return { error: 'To token has no assets (liquidity)' };
+      }
+      if (liabilityIn <= 0n) {
+        return { error: 'From token has no liability' };
+      }
+      if (liabilityOut <= 0n) {
+        return { error: 'To token has no liability' };
+      }
 
       // Fee rates and bounds are contract integers
       const swapFeeIn = parseInputToBigInt(fromToken.params.swapFeeIn, 6);
@@ -152,6 +225,9 @@
 
       // VTP Params
       const n = parseInputToBigInt(vtp.params.n, 0);
+      if (n <= 0n) {
+        return { error: 'VTP parameter n must be positive' };
+      }
       const p = parseInputToBigInt(vtp.params.p, 18);
 
       // pa is human readable (e.g. "1.0")
@@ -160,6 +236,9 @@
       // Handle PA overwrite from config
       if (config && config.paOverwrite) {
         pa = parseInputToBigInt(config.paOverwrite, 18);
+      }
+      if (pa <= 0n) {
+        return { error: 'Price (Pa) must be positive' };
       }
 
       // Discount
@@ -197,6 +276,16 @@
       console.log('realFeeOut:', realFeeOut.toString());
       let estiOut = swapGet - realFeeOut;
 
+      // Validate intermediate result
+      if (estiOut < 0n) {
+        return { error: 'Swap output after fees is negative - swap amount may be too small' };
+      }
+
+      // Check if output exceeds available liquidity before punishment calculation
+      if (estiOut > assetsOut) {
+        return { error: 'Insufficient liquidity - swap amount too large' };
+      }
+
       // 4. Punishments / Rewards
       const newAlrIn = BigIntMath.mulDiv(assetsIn + amountIn, WAD, liabilityIn + realFeeIn, 'ceil');
       const newAlrOut = BigIntMath.mulDiv(assetsOut - estiOut, WAD, liabilityOut + realFeeOut, 'floor');
@@ -209,6 +298,14 @@
         realOut = estiOut - punishment;
       } else {
         realOut = estiOut + punishment;
+      }
+
+      // Validate output
+      if (realOut < 0n) {
+        return { error: 'Calculated output amount is negative - swap amount may be too large' };
+      }
+      if (realOut > assetsOut) {
+        return { error: 'Insufficient liquidity - output exceeds available assets' };
       }
 
       // 5. Restriction Check (AlrTooLowAfterSwap)
@@ -276,8 +373,18 @@
     try {
       const decimals = Number(token.params?.decimals || 18);
       const decimalsPaired = Number(pairedToken.params?.decimals || 18);
-      const amountIn = parseUnits(amount, decimals);
-      if (amountIn === 0n) return { fee: '0', feeRate: '0' };
+      let amountIn;
+      try {
+        amountIn = parseUnits(amount, decimals);
+      } catch (e) {
+        return { error: 'Invalid allocate amount: ' + e.message };
+      }
+      if (amountIn === 0n) {
+        return { error: 'Allocate amount is zero' };
+      }
+      if (amountIn < 0n) {
+        return { error: 'Allocate amount cannot be negative' };
+      }
 
       // Token Status
       const assets = parseUnits(token.status.assets, decimals);
@@ -289,14 +396,25 @@
       const alrLowerBound = parseInputToBigInt(token.params.alrLowerBound, 4);
       const alrLowerBoundPaired = parseInputToBigInt(pairedToken.params.alrLowerBound, 4);
       const n = parseInputToBigInt(vtp.params.n, 0);
+      if (n <= 0n) {
+        return { error: 'VTP parameter n must be positive' };
+      }
 
       // Pa
       let pa = parseInputToBigInt(vtp.status.pa, 18);
       if (config && config.paOverwrite) {
         pa = parseInputToBigInt(config.paOverwrite, 18);
       }
+      if (pa <= 0n) {
+        return { error: 'Price (Pa) must be positive' };
+      }
 
-      // Check ALR 1e18 condition (simplified check)
+      // Validate liability for fee calculation
+      if (liability <= 0n) {
+        return { error: 'Token liability must be positive for allocation' };
+      }
+
+      // Check ALR 1e18 condition (simplified check) - no fee when perfectly balanced
       if (assets === liability && assetsPaired === liabilityPaired) {
         return { fee: '0', feeRate: '0' };
       }
@@ -330,9 +448,11 @@
         const den2 = (l0Wad + amountWad) * 10000n * n;
         const den = den1 * den2;
 
-        const newFee = BigIntMath.mulDiv(amountIn, num, den, 'ceil');
-
-        if (newFee > fee) fee = newFee;
+        // Skip if denominator is zero or negative (can happen with alrLowerBound = 0)
+        if (den > 0n) {
+          const newFee = BigIntMath.mulDiv(amountIn, num, den, 'ceil');
+          if (newFee > fee) fee = newFee;
+        }
       }
 
       const feeRate = amountIn > 0n ? BigIntMath.mulDiv(fee, WAD, amountIn) : 0n;
@@ -364,13 +484,35 @@
     try {
       const decimals = Number(token.params?.decimals || 18);
       const decimalsPaired = Number(pairedToken.params?.decimals || 18);
-      const amountIn = parseUnits(amount, decimals);
-      const userAlloc = parseUnits(userAllocation, decimals);
+      let amountIn, userAlloc, uSharesBig, tSharesBig;
       const sharesDecimals = 18;
-      const uSharesBig = parseUnits(userShares, sharesDecimals);
-      const tSharesBig = parseUnits(totalShares, sharesDecimals);
+      try {
+        amountIn = parseUnits(amount, decimals);
+      } catch (e) {
+        return { error: 'Invalid deallocate amount: ' + e.message };
+      }
+      try {
+        userAlloc = parseUnits(userAllocation, decimals);
+      } catch (e) {
+        return { error: 'Invalid user allocation: ' + e.message };
+      }
+      try {
+        uSharesBig = parseUnits(userShares, sharesDecimals);
+      } catch (e) {
+        return { error: 'Invalid user shares: ' + e.message };
+      }
+      try {
+        tSharesBig = parseUnits(totalShares, sharesDecimals);
+      } catch (e) {
+        return { error: 'Invalid total shares: ' + e.message };
+      }
 
-      if (amountIn === 0n) return { fee: '0', earnings: '0', burn: '0' };
+      if (amountIn === 0n) {
+        return { error: 'Deallocate amount is zero' };
+      }
+      if (amountIn < 0n) {
+        return { error: 'Deallocate amount cannot be negative' };
+      }
 
       // Token Status
       const assets = parseUnits(token.status.assets, decimals);
@@ -380,10 +522,16 @@
       const alrLowerBound = parseInputToBigInt(token.params.alrLowerBound, 4);
       const alrLowerBoundPaired = parseInputToBigInt(pairedToken.params.alrLowerBound, 4);
       const n = parseInputToBigInt(vtp.params.n, 0);
+      if (n <= 0n) {
+        return { error: 'VTP parameter n must be positive' };
+      }
 
       let pa = parseInputToBigInt(vtp.status.pa, 18);
       if (config && config.paOverwrite) {
         pa = parseInputToBigInt(config.paOverwrite, 18);
+      }
+      if (pa <= 0n) {
+        return { error: 'Price (Pa) must be positive' };
       }
 
       // Initial check
@@ -407,7 +555,15 @@
       const earnings = userSharesValue > userAlloc ? userSharesValue - userAlloc : 0n;
       const totalAmount = amountIn + earnings;
 
-      if (totalAmount === 0n) return { fee: '0', earnings: formatUnits(earnings, decimals), burn: formatUnits(sharesToBurn, sharesDecimals) };
+      if (totalAmount === 0n) return { fee: '0', feeRate: '0', earnings: formatUnits(earnings, decimals), burn: formatUnits(sharesToBurn, sharesDecimals), totalAmount: '0' };
+
+      // Validate total amount against available assets
+      if (totalAmount > assets) {
+        return { error: 'Total deallocate amount (input + earnings) exceeds available assets' };
+      }
+      if (totalAmount > liability) {
+        return { error: 'Total deallocate amount exceeds total liability' };
+      }
 
       // Normal Part / Pause Part
       let normalPart = totalAmount;
@@ -442,7 +598,12 @@
         const term2 = l0Wad - a0Wad;
         const num = normalPart * term1 * term2;
 
-        const den = l0Wad * (a0Wad - normalPartWad) * 10000n;
+        // Check for potential division issues
+        const denPart = a0Wad - normalPartWad;
+        if (denPart < 0n) {
+          return { error: 'Calculation error: normalPart exceeds assets (WP 3.4)' };
+        }
+        const den = l0Wad * denPart * 10000n;
 
         if (den > 0n) {
           const x = BigIntMath.mulDiv(num, 1n, den, 'ceil');
@@ -456,7 +617,12 @@
         const term2 = a0Wad - l0Wad;
         const num = normalPart * term1 * term2;
 
-        const den = a0Wad * (l0Wad - normalPartWad) * 10000n * n;
+        // Check for potential division issues
+        const denPart = l0Wad - normalPartWad;
+        if (denPart < 0n) {
+          return { error: 'Calculation error: normalPart exceeds liability (WP 3.1)' };
+        }
+        const den = a0Wad * denPart * 10000n * n;
 
         if (den > 0n) {
           const newFee = BigIntMath.mulDiv(num, 1n, den, 'ceil');
@@ -490,8 +656,19 @@
    * Internal helper to calculate PAV (Price Adjusted Value).
    */
   function _calcPav(n, pas, assetInWad, assetOutWad, realInWad) {
+    // Validate inputs
+    if (assetOutWad === 0n) {
+      throw new Error('Cannot calculate PAV: output token has zero assets');
+    }
+    if (assetInWad === 0n) {
+      throw new Error('Cannot calculate PAV: input token has zero assets');
+    }
+    
     // _2nC2 = n * (2 * n - 1)
     const _2nC2 = n * (2n * n - 1n);
+    if (_2nC2 === 0n) {
+      throw new Error('Cannot calculate PAV: invalid n parameter');
+    }
 
     // a_ = (realInWad * pas / assetOutWad * assetInWad / (assetInWad + realInWad) + 2 * n * 1e18) / _2nC2
     const term1 = BigIntMath.mulDiv(realInWad, pas, assetOutWad);
@@ -510,7 +687,7 @@
 
     // delta = a^2 - 4 * 1e18 * b
     const delta = a * a - 4n * WAD * b;
-    if (delta < 0n) throw new Error('InvalidSwapDelta');
+    if (delta < 0n) throw new Error('Invalid swap parameters: negative delta (swap amount may be too large for current liquidity)');
 
     // t = (a - sqrt(delta)) / 2
     const t = (a - BigIntMath.sqrt(delta)) / 2n;

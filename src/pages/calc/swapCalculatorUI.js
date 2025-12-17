@@ -379,21 +379,74 @@
 
   /**
    * Format BigNumber to decimal string
+   * Handles: BigNumber objects, hex strings, decimal strings, and plain integers
+   * Returns human-readable format (e.g., "1.5" instead of "1500000000000000000")
    */
   function formatDecimal(value, decimals) {
     if (typeof value === 'object' && value._isBigNumber) {
       return COMMON.fromBigNumber(value, decimals);
     }
-    // If value is an integer-like string/number and decimals>0, treat it as base units and scale down
+    
     try {
-        const str = String(value ?? '0');
-        if (!str.includes('.') && !Number.isNaN(Number(str)) && decimals > 0) {
-            const scaled = Number(str) / (10 ** decimals);
-            if (Number.isFinite(scaled)) return scaled.toString();
+      const str = String(value ?? '0');
+      
+      // Handle hex strings (e.g., "0xde0b6b3a7640000")
+      if (str.startsWith('0x')) {
+        if (window.ethers?.utils?.formatUnits) {
+          return window.ethers.utils.formatUnits(str, decimals);
         }
-    } catch (e) {}
+        // Fallback: convert hex to decimal string first
+        const bigVal = BigInt(str);
+        return formatBigIntWithDecimals(bigVal, decimals);
+      }
+      
+      // If already has decimal point, assume it's already formatted
+      if (str.includes('.')) {
+        return str;
+      }
+      
+      // Handle scientific notation in input (shouldn't happen, but just in case)
+      if (str.includes('e') || str.includes('E')) {
+        const num = Number(str);
+        if (!Number.isFinite(num) || num === 0) return '0';
+        // This case is unusual - scientific notation input that's meant to be base units
+        // Try to convert and format properly
+        return num.toFixed(Math.min(decimals, 20)).replace(/\.?0+$/, '') || '0';
+      }
+      
+      // Plain integer string - treat as base units and scale down
+      if (/^\d+$/.test(str) && decimals > 0) {
+        const bigVal = BigInt(str);
+        return formatBigIntWithDecimals(bigVal, decimals);
+      }
+    } catch (e) {
+      console.warn('[formatDecimal] Error formatting value', { value, decimals, e });
+    }
 
     return value != null ? value.toString() : '';
+  }
+  
+  /**
+   * Format a BigInt with given decimals to a human-readable decimal string
+   */
+  function formatBigIntWithDecimals(bigVal, decimals) {
+    if (decimals <= 0) return bigVal.toString();
+    
+    const divisor = 10n ** BigInt(decimals);
+    const intPart = bigVal / divisor;
+    const fracPart = bigVal % divisor;
+    
+    if (fracPart === 0n) {
+      return intPart.toString();
+    }
+    
+    // Handle negative numbers
+    const isNegative = fracPart < 0n;
+    const absFrac = isNegative ? -fracPart : fracPart;
+    
+    // Pad fraction with leading zeros and trim trailing zeros
+    const fracStr = absFrac.toString().padStart(decimals, '0').replace(/0+$/, '');
+    return `${intPart}.${fracStr}`;
   }
 
   /**
@@ -500,8 +553,19 @@
     const type = document.getElementById('calc-operation-type').value;
     const swapAmount = document.getElementById('swap-amount-input').value;
     
-    if (!swapAmount || parseFloat(swapAmount) <= 0) {
-      alert('Please enter a valid amount');
+    // Validate input - display error instead of alert
+    if (!swapAmount || swapAmount.trim() === '') {
+      displayResults({ error: 'Please enter an amount' });
+      return;
+    }
+    
+    const parsedAmount = parseFloat(swapAmount);
+    if (isNaN(parsedAmount)) {
+      displayResults({ error: 'Invalid amount format' });
+      return;
+    }
+    if (parsedAmount <= 0) {
+      displayResults({ error: 'Amount must be greater than zero' });
       return;
     }
 
@@ -521,22 +585,21 @@
     } else if (type === 'allocate') {
         // fromToken is the token to allocate
         result = calc.estimateAllocateResult(params.vtp, params.fromToken, params.toToken, swapAmount, config);
-        result.type = 'allocate';
+        if (!result.error) {
+          result.type = 'allocate';
+        }
     } else if (type === 'deallocate') {
         // fromToken is the token to deallocate
         const userAlloc = document.getElementById('param-user-alloc').value;
         const userShares = document.getElementById('param-user-shares').value;
         const totalShares = document.getElementById('param-total-shares').value;
         result = calc.estimateDeallocateResult(params.vtp, params.fromToken, params.toToken, swapAmount, userAlloc, userShares, totalShares, config);
-        result.type = 'deallocate';
+        if (!result.error) {
+          result.type = 'deallocate';
+        }
     }
     
     console.log('[Calculator] Result:', result);
-
-    if (result.error) {
-      alert('Calculation error: ' + result.error);
-      return;
-    }
 
     displayResults(result);
   }
@@ -550,15 +613,29 @@
     
     const formatNumber = (val) => {
       const num = parseFloat(val);
-      if (isNaN(num)) return '0';
+      if (isNaN(num)) return 'Error';
       return num.toFixed(8);
     };
 
     const formatPercent = (val) => {
       const num = parseFloat(val) * 100;
-      if (isNaN(num)) return '0%';
+      if (isNaN(num)) return 'Error';
       return num.toFixed(4) + '%';
     };
+
+    // Display error if result contains error
+    if (result.error) {
+      container.innerHTML = `
+        <div class="result-section result-error">
+          <h4 class="result-section-title">❌ Calculation Error</h4>
+          <div class="result-row result-row-large">
+            <span class="result-label">Error:</span>
+            <span class="result-value highlight-fee">${result.error}</span>
+          </div>
+        </div>
+      `;
+      return;
+    }
 
     if (result.type === 'allocate') {
         container.innerHTML = `
