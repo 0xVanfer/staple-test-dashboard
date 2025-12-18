@@ -190,8 +190,32 @@
   }
 
   /**
+   * @function checkPathHasLiquidity
+   * @private
+   * @description Checks if a path has sufficient liquidity.
+   * A path is considered to have no liquidity if any VTP in the path has
+   * either token0 or token1 with zero liability.
+   *
+   * @param {Array} path - Array of VTP objects in the path.
+   * @returns {boolean} True if the path has liquidity, false otherwise.
+   */
+  function checkPathHasLiquidity(path){
+    if (!Array.isArray(path) || path.length === 0) return false;
+    for (const vtp of path){
+      const liability0 = vtp?.token0?.status?.liability;
+      const liability1 = vtp?.token1?.status?.liability;
+      // Check if either side has zero or missing liability
+      const l0IsZero = !liability0 || (typeof liability0 === 'object' && liability0.isZero?.()) || liability0 === '0' || Number(liability0) === 0;
+      const l1IsZero = !liability1 || (typeof liability1 === 'object' && liability1.isZero?.()) || liability1 === '0' || Number(liability1) === 0;
+      if (l0IsZero || l1IsZero) return false;
+    }
+    return true;
+  }
+
+  /**
    * @function renderEnumeratedPaths
    * @description Renders the list of all possible swap paths found.
+   * Separates paths into two categories: with liquidity (selectable) and without liquidity (display only).
    * Highlights the best path and the currently selected path.
    *
    * @param {HTMLElement} container - The container element.
@@ -202,48 +226,136 @@
    * @param {Array} outputs - Array of estimated outputs for each path (optional).
    * @param {number} bestIndex - Index of the best path.
    * @param {number} selectedIndex - Index of the currently selected path.
+   * @returns {Object} Object containing { liquidPaths: number[], noLiquidityPaths: number[] } indices.
    */
   function renderEnumeratedPaths(container, paths, fromAsset, toAsset, tokenSymbols, outputs=[], bestIndex=-1, selectedIndex=-1){
-    if (!container) return;
+    if (!container) return { liquidPaths: [], noLiquidityPaths: [] };
     if (!paths.length){
       container.innerHTML = '<div class="placeholder">No feasible path</div>';
-      return;
+      updateRoutesCount(0, 0);
+      return { liquidPaths: [], noLiquidityPaths: [] };
     }
     container.innerHTML = '';
-    const frag = document.createDocumentFragment();
     const fromSym = tokenSymbols[fromAsset.toLowerCase()]?.symbol || 'FROM';
     const toSym = tokenSymbols[toAsset.toLowerCase()]?.symbol || 'TO';
     
+    // Separate paths by liquidity
+    const liquidPaths = [];
+    const noLiquidityPaths = [];
+    
     paths.forEach((path, idx)=>{
-      const item = document.createElement('div');
-      item.className = 'path-item';
-      item.dataset.index = idx;
-      
-      if (idx === bestIndex) item.classList.add('best');
-      if (idx === selectedIndex) item.classList.add('selected');
-      
-      const ids = path.map(v=> v?.params?.id).join(' / ');
-      
-      // Construct the path string (e.g., "ETH => (USDC/ETH) => USDC")
-      const chainStr = [fromSym, ...path.map(v=>{
-        const a0 = v?.token0?.params?.asset;
-        const a1 = v?.token1?.params?.asset;
-        const s0 = tokenSymbols[a0?.toLowerCase()]?.symbol || (a0||'').slice(0,6);
-        const s1 = tokenSymbols[a1?.toLowerCase()]?.symbol || (a1||'').slice(0,6);
-        return `(${s0}/${s1})`;
-      }), toSym].join(' => ');
-      
-      const outDisp = outputs[idx] != null ? `<span class="badge">Out: ${outputs[idx]}</span>` : '';
-      
-      item.innerHTML = `<div class="path-head">
-          <span class="assets">${chainStr}</span>
-          <span class="badge">Len: ${path.length}</span>
-          ${outDisp}
-          <span class="badge">IDs: ${ids}</span>
-        </div>`;
-      frag.appendChild(item);
+      if (checkPathHasLiquidity(path)){
+        liquidPaths.push(idx);
+      } else {
+        noLiquidityPaths.push(idx);
+      }
     });
-    container.appendChild(frag);
+    
+    // Update routes count display
+    updateRoutesCount(liquidPaths.length, noLiquidityPaths.length);
+    
+    // Render liquid paths section
+    if (liquidPaths.length > 0){
+      const liquidSection = document.createElement('div');
+      liquidSection.className = 'paths-section liquid-paths';
+      liquidSection.innerHTML = `<div class="section-header" style="font-size:13px;color:#059669;font-weight:600;margin-bottom:8px;">✅ Available (${liquidPaths.length})</div>`;
+      
+      liquidPaths.forEach(idx=>{
+        const path = paths[idx];
+        const item = createPathItem(path, idx, fromSym, toSym, tokenSymbols, outputs[idx], idx === bestIndex, idx === selectedIndex, false);
+        liquidSection.appendChild(item);
+      });
+      container.appendChild(liquidSection);
+    }
+    
+    // Render no-liquidity paths section
+    if (noLiquidityPaths.length > 0){
+      const noLiqSection = document.createElement('div');
+      noLiqSection.className = 'paths-section no-liquidity-paths';
+      noLiqSection.innerHTML = `<div class="section-header" style="font-size:13px;color:#dc2626;font-weight:600;margin:16px 0 8px;">⚠️ No Liquidity (${noLiquidityPaths.length})</div>`;
+      
+      noLiquidityPaths.forEach(idx=>{
+        const path = paths[idx];
+        const item = createPathItem(path, idx, fromSym, toSym, tokenSymbols, null, false, false, true);
+        noLiqSection.appendChild(item);
+      });
+      container.appendChild(noLiqSection);
+    }
+    
+    return { liquidPaths, noLiquidityPaths };
+  }
+  
+  /**
+   * @function createPathItem
+   * @private
+   * @description Creates a DOM element for a single path item.
+   *
+   * @param {Array} path - Array of VTPs in the path.
+   * @param {number} idx - Index of the path.
+   * @param {string} fromSym - From token symbol.
+   * @param {string} toSym - To token symbol.
+   * @param {Object} tokenSymbols - Map of token symbols.
+   * @param {string|null} output - Estimated output (optional).
+   * @param {boolean} isBest - Whether this is the best path.
+   * @param {boolean} isSelected - Whether this path is selected.
+   * @param {boolean} noLiquidity - Whether this path has no liquidity.
+   * @returns {HTMLElement} The path item element.
+   */
+  function createPathItem(path, idx, fromSym, toSym, tokenSymbols, output, isBest, isSelected, noLiquidity){
+    const item = document.createElement('div');
+    item.className = 'path-item';
+    item.dataset.index = idx;
+    
+    if (isBest) item.classList.add('best');
+    if (isSelected) item.classList.add('selected');
+    if (noLiquidity) {
+      item.classList.add('no-liquidity');
+      item.style.opacity = '0.5';
+      item.style.cursor = 'not-allowed';
+      item.style.pointerEvents = 'none';
+    }
+    
+    const ids = path.map(v=> v?.params?.id).join(' / ');
+    
+    // Construct the path string (e.g., "ETH => (USDC/ETH) => USDC")
+    const chainStr = [fromSym, ...path.map(v=>{
+      const a0 = v?.token0?.params?.asset;
+      const a1 = v?.token1?.params?.asset;
+      const s0 = tokenSymbols[a0?.toLowerCase()]?.symbol || (a0||'').slice(0,6);
+      const s1 = tokenSymbols[a1?.toLowerCase()]?.symbol || (a1||'').slice(0,6);
+      return `(${s0}/${s1})`;
+    }), toSym].join(' => ');
+    
+    const outDisp = output != null ? `<span class="badge">Out: ${output}</span>` : '';
+    const noLiqBadge = noLiquidity ? '<span class="badge" style="background:#fef2f2;color:#dc2626;">No Liquidity</span>' : '';
+    
+    item.innerHTML = `<div class="path-head">
+        <span class="assets">${COMMON.escapeHtml(chainStr)}</span>
+        <span class="badge">Len: ${path.length}</span>
+        ${outDisp}
+        ${noLiqBadge}
+        <span class="badge">IDs: ${ids}</span>
+      </div>`;
+    return item;
+  }
+  
+  /**
+   * @function updateRoutesCount
+   * @private
+   * @description Updates the routes count display in the summary.
+   *
+   * @param {number} liquidCount - Number of paths with liquidity.
+   * @param {number} noLiquidityCount - Number of paths without liquidity.
+   */
+  function updateRoutesCount(liquidCount, noLiquidityCount){
+    const countEl = document.getElementById('routes-count');
+    if (!countEl) return;
+    const total = liquidCount + noLiquidityCount;
+    if (noLiquidityCount > 0){
+      countEl.textContent = `${liquidCount} available / ${total} total`;
+    } else {
+      countEl.textContent = `${total} routes`;
+    }
   }
 
   /**
@@ -340,6 +452,59 @@
   }
 
   /**
+   * @function renderSelectedPath
+   * @description Renders the summary of the currently selected path (can be best or user-chosen).
+   * Displays a label indicating whether it's the best path or a user-selected alternative.
+   *
+   * @param {HTMLElement} summaryEl - The summary container element.
+   * @param {Object} opts - Options object containing:
+   *   @param {string} opts.estiOut - Estimated output.
+   *   @param {Array} opts.pathVtps - Array of VTPs in the path.
+   *   @param {string} opts.fromReadable - From token symbol.
+   *   @param {string} opts.toReadable - To token symbol.
+   *   @param {boolean} opts.isBest - Whether this is the best (optimal) path.
+   *   @param {number} opts.selectedIndex - Index of the selected path.
+   *   @param {number} opts.bestIndex - Index of the best path.
+   * @param {Object} tokenSymbols - Map of token symbols.
+   */
+  function renderSelectedPath(summaryEl, opts, tokenSymbols){
+    if (!summaryEl) return;
+    if (!opts || !opts.pathVtps){
+      summaryEl.innerHTML = '<div style="color:rgba(100,100,100,0.7);font-size:14px;">Select tokens to see routes</div>';
+      return;
+    }
+    const { estiOut, pathVtps, fromReadable, toReadable, isBest, selectedIndex, bestIndex } = opts;
+    const fromSym = fromReadable;
+    const toSym = toReadable;
+    
+    const chain = [fromSym, ...pathVtps.map(v=>{
+      const a0=v?.token0?.params?.asset; const a1=v?.token1?.params?.asset;
+      const s0 = tokenSymbols[a0?.toLowerCase()]?.symbol || a0?.slice(0,6);
+      const s1 = tokenSymbols[a1?.toLowerCase()]?.symbol || a1?.slice(0,6);
+      return `(${s0}/${s1})`;
+    }), toSym].join(' ➜ ');
+    
+    // Label differentiates between best path and user-selected path
+    const pathLabel = isBest 
+      ? '🏆 Best Route (Optimal)' 
+      : `📍 Selected Route #${selectedIndex + 1}` + (bestIndex >= 0 ? ` (Best is #${bestIndex + 1})` : '');
+    const pathClass = isBest ? 'path-item best selected' : 'path-item selected user-selected';
+    
+    summaryEl.innerHTML =
+      `<div class="${COMMON.escapeHtml(pathClass)}" data-best="${isBest ? 1 : 0}">
+         <div class="path-label" style="font-size:13px;color:${isBest ? '#059669' : '#d97706'};margin-bottom:8px;font-weight:600;">${pathLabel}</div>
+         <div class="path-head">
+           <div class="assets" style="font-size:18px;margin-bottom:12px;font-weight:700;">${COMMON.escapeHtml(chain)}</div>
+           <div style="display:flex;gap:10px;flex-wrap:wrap;">
+             <span class="badge" style="font-size:15px;padding:6px 12px;">📊 Output: ${COMMON.escapeHtml(String(estiOut || '-'))}</span>
+             <span class="badge" style="padding:6px 12px;">Hops: ${pathVtps.length}</span>
+             <span class="badge" style="padding:6px 12px;">VTP IDs: ${pathVtps.map(v=>v?.params?.id).join(', ')}</span>
+           </div>
+         </div>
+       </div>`;
+  }
+
+  /**
    * @function renderEstimateError
    * @description Displays or clears an error message in the details area.
    *
@@ -393,9 +558,11 @@
     renderTokenSelect,
     renderEnumeratedPaths,
     renderBestPath,
+    renderSelectedPath,
     renderVtpDetails,
     renderEstimateError,
     renderExecuteArea,
+    updateRoutesCount,
   };
 })();
 

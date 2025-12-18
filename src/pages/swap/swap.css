@@ -361,6 +361,104 @@ body {
     gap: 8px;
 }
 
+/* Path sections */
+.paths-section {
+    margin-bottom: 16px;
+}
+
+.paths-section:last-child {
+    margin-bottom: 0;
+}
+
+.paths-section .section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Path items in all-paths list */
+.routes-list .path-item {
+    padding: 12px;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 8px;
+}
+
+.routes-list .path-item:last-child {
+    margin-bottom: 0;
+}
+
+.routes-list .path-item:hover:not(.no-liquidity) {
+    border-color: var(--primary);
+    background: white;
+}
+
+.routes-list .path-item.selected {
+    border-color: var(--primary);
+    background: #eef2ff;
+    box-shadow: 0 0 0 2px rgba(90, 103, 216, 0.2);
+}
+
+.routes-list .path-item.best {
+    border-color: var(--success);
+    background: #ecfdf5;
+}
+
+.routes-list .path-item.best::before {
+    content: '🏆 ';
+}
+
+.routes-list .path-item.best.selected {
+    border-color: var(--success);
+    background: #d1fae5;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+/* No liquidity paths */
+.routes-list .path-item.no-liquidity {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: #fef2f2;
+    border-color: #fecaca;
+    border-style: dashed;
+}
+
+.routes-list .path-item.no-liquidity:hover {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.routes-list .path-item.no-liquidity .assets {
+    color: #9ca3af;
+    text-decoration: line-through;
+}
+
+.routes-list .path-item .path-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.routes-list .path-item .assets {
+    font-weight: 500;
+    color: var(--text);
+    flex: 1;
+    min-width: 200px;
+}
+
+.routes-list .path-item .badge {
+    background: rgba(90, 103, 216, 0.1);
+    color: var(--primary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
 .route-card {
     padding: 12px;
     background: var(--bg);
@@ -600,6 +698,21 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.3);
     padding: 16px;
     border-radius: 10px;
+}
+
+/* User-selected non-optimal path styling */
+.best-route-display .path-item.user-selected {
+    background: rgba(217, 119, 6, 0.15);
+    border: 2px solid rgba(217, 119, 6, 0.5);
+}
+
+.best-route-display .path-item.user-selected .path-label {
+    color: #fbbf24 !important;
+}
+
+/* Best path indicator */
+.best-route-display .path-item.best .path-label {
+    color: #34d399 !important;
 }
 
 .best-route-display .path-head {

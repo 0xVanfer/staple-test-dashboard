@@ -141,12 +141,35 @@
    * 5. Repopulates the token selection dropdowns.
    */
   async function refreshData(){
+    // Show loading state
+    const fromEl = document.getElementById('swap-from');
+    const toEl = document.getElementById('swap-to');
+    const bestSummaryEl = document.getElementById('best-path-summary');
+    const listEl = document.getElementById('all-paths');
+    
+    // Indicate loading state to the user
+    if (fromEl) fromEl.innerHTML = '<option value="">Loading pools...</option>';
+    if (toEl) toEl.innerHTML = '<option value="">Loading pools...</option>';
+    if (bestSummaryEl) bestSummaryEl.innerHTML = '<div class="placeholder">Loading pool data...</div>';
+    if (listEl) listEl.innerHTML = '<div class="placeholder">Loading pool data...</div>';
+    ui.updateRoutesCount(0, 0);
+    
     poolsCache = await window.contractData.getPools();
     if (!Array.isArray(poolsCache) || !poolsCache.length) {
+      // Show waiting message
+      if (bestSummaryEl) bestSummaryEl.innerHTML = '<div class="placeholder">Waiting for pool data... (cache may be refreshing)</div>';
       // Fallback to polling wait (initial load might not be ready)
       poolsCache = await waitForPools();
     }
-    if (!poolsCache.length) console.warn('[swap] No pools fetched');
+    if (!poolsCache.length) {
+      console.warn('[swap] No pools fetched');
+      // Show error state
+      if (fromEl) fromEl.innerHTML = '<option value="">No pools available</option>';
+      if (toEl) toEl.innerHTML = '<option value="">No pools available</option>';
+      if (bestSummaryEl) bestSummaryEl.innerHTML = '<div class="placeholder">No pools found. Please check Environment settings.</div>';
+      if (listEl) listEl.innerHTML = '<div class="placeholder">No pools available</div>';
+      return;
+    }
     const decimalsFallback = buildDecimalsFromPools(poolsCache);
     
     // Build the graph from the pool data
@@ -240,6 +263,28 @@
    */
   function parseAmountInput(amountStr, decimals){
     try { return ethers.utils.parseUnits(String(amountStr||'0'), decimals); } catch { return ethers.BigNumber.from(0); }
+  }
+
+  /**
+   * @function checkPathHasLiquidity
+   * @description Checks if a path has sufficient liquidity.
+   * A path is considered to have no liquidity if any VTP in the path has
+   * either token0 or token1 with zero liability.
+   *
+   * @param {Array} path - Array of VTP objects in the path.
+   * @returns {boolean} True if the path has liquidity, false otherwise.
+   */
+  function checkPathHasLiquidity(path){
+    if (!Array.isArray(path) || path.length === 0) return false;
+    for (const vtp of path){
+      const liability0 = vtp?.token0?.status?.liability;
+      const liability1 = vtp?.token1?.status?.liability;
+      // Check if either side has zero or missing liability
+      const l0IsZero = !liability0 || (typeof liability0 === 'object' && liability0.isZero?.()) || liability0 === '0' || Number(liability0) === 0;
+      const l1IsZero = !liability1 || (typeof liability1 === 'object' && liability1.isZero?.()) || liability1 === '0' || Number(liability1) === 0;
+      if (l0IsZero || l1IsZero) return false;
+    }
+    return true;
   }
 
   /**
@@ -391,8 +436,46 @@
     const { tokenSymbols, tokenDecimals } = dataCache || {};
     ui.renderVtpDetails(bestDetailEl, vtps, tokenSymbols, tokenDecimals, processes, selectedSwapContext.from, selectedSwapContext.to);
 
+    // Update selected path summary to reflect the estimation result
+    updateSelectedPathSummary();
+
     // Render execute area (update main button state)
     updateExecuteButton();
+  }
+
+  /**
+   * @function updateSelectedPathSummary
+   * @description Updates the best-path-summary area to show the currently selected path.
+   * Differentiates between the optimal (best) path and user-selected alternative paths.
+   */
+  function updateSelectedPathSummary(){
+    const bestSummaryEl = document.getElementById('best-path-summary');
+    if (!bestSummaryEl || !dataCache || selectedIndex < 0 || !pathsState[selectedIndex]) return;
+    
+    const { tokenSymbols, tokenDecimals } = dataCache;
+    const entry = pathsState[selectedIndex];
+    const isBest = (selectedIndex === bestIndex);
+    
+    // Get estimated output from context
+    let estiOutReadable = '-';
+    if (selectedSwapContext && selectedSwapContext.estiOutBN && !selectedSwapContext.estiOutBN.eq(0)) {
+      try {
+        estiOutReadable = ethers.utils.formatUnits(selectedSwapContext.estiOutBN, selectedSwapContext.toDec);
+      } catch {}
+    }
+    
+    const fromSym = tokenSymbols[selectedSwapContext?.from?.toLowerCase()]?.symbol || 'FROM';
+    const toSym = tokenSymbols[selectedSwapContext?.to?.toLowerCase()]?.symbol || 'TO';
+    
+    ui.renderSelectedPath(bestSummaryEl, {
+      estiOut: estiOutReadable,
+      pathVtps: entry.pathVtps,
+      fromReadable: fromSym,
+      toReadable: toSym,
+      isBest: isBest,
+      selectedIndex: selectedIndex,
+      bestIndex: bestIndex
+    }, tokenSymbols);
   }
 
   /**
@@ -418,10 +501,24 @@
       bestSummaryEl.innerHTML = '<div class="placeholder">Select assets</div>';
       bestDetailEl.innerHTML = '';
       execEl.innerHTML = '<div class="placeholder">Select assets</div>';
+      // Reset routes count and button state
+      const listEl = document.getElementById('all-paths');
+      if (listEl) listEl.innerHTML = '<div class="placeholder">Select assets</div>';
+      ui.updateRoutesCount(0, 0);
+      pathsState = [];
+      selectedSwapContext = null;
+      updateExecuteButton();
       return;
     }
     if (!dataCache){
       bestSummaryEl.innerHTML = '<div class="placeholder">Data not ready</div>';
+      // Reset routes count and button state
+      const listEl = document.getElementById('all-paths');
+      if (listEl) listEl.innerHTML = '<div class="placeholder">Data not ready</div>';
+      ui.updateRoutesCount(0, 0);
+      pathsState = [];
+      selectedSwapContext = null;
+      updateExecuteButton();
       return;
     }
     
@@ -440,6 +537,7 @@
       execEl.innerHTML = '<div class="placeholder">Enter amount to compute paths</div>';
       pathsState = [];
       selectedSwapContext = null;
+      ui.updateRoutesCount(0, 0);
       updateExecuteButton();
       return;
     }
@@ -454,6 +552,30 @@
       execEl.innerHTML = '<div class="placeholder">No valid path</div>';
       pathsState = [];
       selectedSwapContext = null;
+      // Reset routes count and button state
+      ui.updateRoutesCount(0, 0);
+      updateExecuteButton();
+      return;
+    }
+
+    // Build pathsState for internal tracking (include liquidity info)
+    pathsState = rawPaths.map(p=> ({ 
+      pathVtps: p, 
+      pathIds: p.map(v=> graph.normalizeId(v.params.id)),
+      hasLiquidity: checkPathHasLiquidity(p)
+    }));
+    
+    // Render all enumerated paths first (to show the structure)
+    // This also updates the routes count display
+    const { liquidPaths, noLiquidityPaths } = ui.renderEnumeratedPaths(listEl, rawPaths, fromAsset, toAsset, tokenSymbols, [], -1, -1);
+    
+    // If no paths have liquidity, show error
+    if (liquidPaths.length === 0){
+      bestSummaryEl.innerHTML = '<div class="placeholder">All paths have no liquidity</div>';
+      bestDetailEl.innerHTML = '';
+      execEl.innerHTML = '<div class="placeholder">No executable path available</div>';
+      selectedSwapContext = null;
+      updateExecuteButton();
       return;
     }
 
@@ -463,17 +585,17 @@
       return;
     }
 
-    // Prepare Path IDs for the contract call
-    const allPathIds = rawPaths.map(path => path.map(v=> graph.normalizeId(v.params.id)));
+    // Only use paths with liquidity for calcBetterPath
+    const liquidPathIds = liquidPaths.map(idx => pathsState[idx].pathIds);
     
-    // Call calcBetterPath to get best path and estimated output
+    // Call calcBetterPath to get best path and estimated output (only for liquid paths)
     let bestOutBN = ethers.BigNumber.from(0);
     let bestPathIds = [];
     try {
       // Use RpcManager for rate limiting
       let res;
       if (window.RpcManager) {
-          res = await window.RpcManager.call(uiPool, 'calcBetterPath', [fromAsset, amountInBN, allPathIds, 0]);
+          res = await window.RpcManager.call(uiPool, 'calcBetterPath', [fromAsset, amountInBN, liquidPathIds, 0]);
       } else {
           throw new Error('RpcManager required');
       }
@@ -487,16 +609,13 @@
       console.warn('[swap] calcBetterPath failed', e);
     }
 
-    // Build pathsState for internal tracking
-    pathsState = rawPaths.map(p=> ({ pathVtps: p, pathIds: p.map(v=> graph.normalizeId(v.params.id)) }));
-
     // Determine the index of the best path returned by the contract
     const keyOf = (ids)=> ids.join('-');
     const bestKey = keyOf(bestPathIds);
     bestIndex = pathsState.findIndex(p=> keyOf(p.pathIds) === bestKey);
-    if (bestIndex < 0) {
-      // Fallback: select the first path (usually shortest) if matching fails
-      bestIndex = 0;
+    if (bestIndex < 0 || !pathsState[bestIndex]?.hasLiquidity) {
+      // Fallback: select the first liquid path if matching fails
+      bestIndex = liquidPaths[0] ?? -1;
     }
 
     // Only provide output value for the best path in the list view initially
@@ -510,25 +629,23 @@
     buildSelectedContext(amountInBN, amountInReadable, fromAsset, toAsset, fromDec, toDec);
     selectedSwapContext.estiOutBN = bestOutBN; // Use bestPath rough estimate first, refresh with detailed estimate later
 
-    // Render all enumerated paths
+    // Re-render enumerated paths with outputs and selection
     ui.renderEnumeratedPaths(listEl, rawPaths, fromAsset, toAsset, tokenSymbols, outReadableArr, bestIndex, selectedIndex);
 
-    // Render best path summary
+    // Render selected path summary (initially the best path)
     const bestObj = pathsState[bestIndex];
-    ui.renderBestPath(
+    ui.renderSelectedPath(
       bestSummaryEl,
-      bestDetailEl,
       {
         estiOut: outReadableArr[bestIndex] || '0',
         pathVtps: bestObj.pathVtps,
         fromReadable: tokenSymbols[fromAsset.toLowerCase()]?.symbol || 'FROM',
-        toReadable: tokenSymbols[toAsset.toLowerCase()]?.symbol || 'TO'
+        toReadable: tokenSymbols[toAsset.toLowerCase()]?.symbol || 'TO',
+        isBest: true,
+        selectedIndex: selectedIndex,
+        bestIndex: bestIndex
       },
-      tokenSymbols,
-      fromAsset,
-      toAsset,
-      tokenDecimals,
-      [] // processes estimation filled later
+      tokenSymbols
     );
 
     // Render execute area (use rough estimate first)
@@ -662,6 +779,7 @@
    * @function bindPathSelection
    * @description Binds click events to the path list items.
    * When a path is clicked, it updates the selection, re-estimates, and updates the UI.
+   * Ignores paths without liquidity.
    *
    * @param {HTMLElement} listEl - The container element for the path list.
    * @param {Object} ctx - The current swap context (amounts, assets, decimals).
@@ -671,12 +789,35 @@
     listEl.addEventListener('click', async e=>{
       const item = e.target.closest('.path-item');
       if (!item || !item.dataset.index) return;
+      
+      // Ignore clicks on no-liquidity paths
+      if (item.classList.contains('no-liquidity')) return;
+      
       const idx = Number(item.dataset.index);
-      if (!pathsState[idx]) return;
+      if (!pathsState[idx] || !pathsState[idx].hasLiquidity) return;
+      
       selectedIndex = idx;
       buildSelectedContext(ctx.amountInBN, ctx.amountInReadable, ctx.fromAsset, ctx.toAsset, ctx.fromDec, ctx.toDec);
+      
+      // Show preliminary summary (before estimation completes)
+      const isBest = (selectedIndex === bestIndex);
+      const { tokenDecimals } = dataCache || {};
+      ui.renderSelectedPath(
+        document.getElementById('best-path-summary'),
+        {
+          estiOut: 'Calculating...',
+          pathVtps: pathsState[idx].pathVtps,
+          fromReadable: tokenSymbols[ctx.fromAsset.toLowerCase()]?.symbol || 'FROM',
+          toReadable: tokenSymbols[ctx.toAsset.toLowerCase()]?.symbol || 'TO',
+          isBest: isBest,
+          selectedIndex: selectedIndex,
+          bestIndex: bestIndex
+        },
+        tokenSymbols
+      );
+      
       renderExecuteAreaFromContext(); // Use empty estimation first
-      await estimateSelectedPathAndRender(); // Re-estimate and show error/details
+      await estimateSelectedPathAndRender(); // Re-estimate, update summary and show details
       markSelection(listEl);
     });
   }
